@@ -1,6 +1,9 @@
 #!/usr/bin/python
 #
-# naza gps serial decoder, taken from http://www.rcgroups.com/forums/showthread.php?t=1995704
+# naza gps serial decoder, taken from 
+#	http://www.rcgroups.com/forums/showthread.php?t=1995704a
+#	https://github.com/mandersonian/minimosd-naza-frsky/blob/master/NazaDecoderLib.cppa
+#	https://developer.mbed.org/users/garfield38/code/NazaDecoder/rev/b0ba4e08a18c
 # serial line: 115200 baud
 # message struct: 55 AA ID LE <payload> ZZ ZZ
 #	0x55 0xAA .. header
@@ -9,19 +12,24 @@
 #	ID 0x20 which contains compass data, sent every 30ms (refer to post #62 for more details)
 #	ID 0x30 which contains GPS module version numbers, sent every 2s (refer to post#120 for more details)
 
-import logging
-import json
+import logging, json
 import serial
-import math
-import struct
-import sys
+import math, struct
+import sys, datetime, time
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s', stream=sys.stdout)
 msgtypes = { 0x10: "gps", 0x20: "com", 0x30: "ver" }
-cs1 = 0; cs2 = 0; magXMin = 0; magXMax = 0; magYMin = 0; magYMax = 0;
+fixtypes = { 0: "nolock", 2: "2d", 3: "3d" }
+magXMin = 0; magXMax = 0; magYMin = 0; magYMax = 0;
 
-def updatecs(din):
-	global cs1, cs2
+import threading
+message_lock = threading.Lock()
+message = {}
+message["gps"] = {}
+message["com"] = {}
+message["ver"] = {}
+
+def updatecs(din, cs1, cs2):
 	cs1 += din; cs2 += cs1; cs1 &= 0xff; cs2 &= 0xff
 	#logging.debug("0x%02x 0x%02x" % (cs1, cs2))
 
@@ -56,8 +64,8 @@ def decode_long(data, idx, mask):
 #	CHECKSUM
 #		BYTE 17-18 (CS): checksum, calculated the same way as for uBlox binary messages
 def decode_ver(msg):
-	msg["decoded"]["version"] = "v%d.%d.%d.%d" % (msg["mdata"][7], msg["mdata"][6],msg["mdata"][5], msg["mdata"][4])
-	msg["decoded"]["hw"] = "v%d.%d.%d.%d" % (msg["mdata"][11], msg["mdata"][10],msg["mdata"][9], msg["mdata"][8])
+	msg["decoded"]["version"] = "v%d.%d.%d.%d" % (msg["payload"][7], msg["payload"][6],msg["payload"][5], msg["payload"][4])
+	msg["decoded"]["hw"] = "v%d.%d.%d.%d" % (msg["payload"][11], msg["payload"][10],msg["payload"][9], msg["payload"][8])
 
 
 #http://www.rcgroups.com/forums/showpost.php?p=26248426&postcount=62
@@ -89,10 +97,10 @@ def decode_ver(msg):
 #	To calculate the heading (not tilt compensated) you need to do atan2 on the resulting y any a values, convert radians to degrees and add 360 if the result is negative.
 def decode_com(msg):
 	global magXMin, magXMax, magYMin, magYMax
-	mask = msg["mdata"][0] #4rth in original, dunno why 9th in description
+	mask = msg["payload"][4]
 	mask = (((mask ^ (mask >> 4)) & 0x0F) | ((mask << 3) & 0xF0)) ^ (((mask & 0x01) << 3) | ((mask & 0x01) << 7))
-	x = decode_short(msg["mdata"], 0, mask)
-	y = decode_short(msg["mdata"], 2, mask)
+	x = decode_short(msg["payload"], 0, mask)
+	y = decode_short(msg["payload"], 2, mask)
 	if(x > magXMax):
 		magXMax = x
 	if(x < magXMin):
@@ -160,54 +168,153 @@ def decode_com(msg):
 #		You wil find the uBlox binary messages specification in this document. It also contains checksum calculation algorithm.
 
 def decode_gps(msg):
-	#mdata is stripped from header >> -4
-	msg["decoded"]["numer_of_satelites"] = msg["mdata"][53 - 4]
+	# respecting numbering in NazaDecoderLib.c, fileds numbered from 1, with headers >> -5
+	mask = msg["payload"][55]
+
+	time = decode_long(msg["payload"], 0, mask)
+	msg["decoded"]["time"] = time
+	msg["decoded"]["bintime"] = bin(time)
+	second = time & 0x3f
+        time >>= 6
+        minute = time & 0x3f
+        time >>= 6
+        hour = time & 0x0f
+        time >>= 4
+        day = time & 0x1f
+        time >>= 5
+        if(hour > 7):
+		day += 1
+	month = time & 0x0f
+        time >>= 4
+        year = (time & 0x3f) + 2000 # ?? << 
+	msg["decoded"]["datetime"] = str(datetime.datetime(year=year, month=month, day=day, hour=hour, minute=minute, second=second))
+
+	msg["decoded"]["lon"] = decode_long(msg["payload"], 4, mask) / 10000000.0
+	msg["decoded"]["lat"] = decode_long(msg["payload"], 8, mask) / 10000000.0
+	msg["decoded"]["gpsAlt"] = decode_long(msg["payload"], 12, mask) / 1000.0
+	msg["decoded"]["ha"] = decode_long(msg["payload"], 16, mask) / 1000.0
+	msg["decoded"]["va"] = decode_long(msg["payload"], 20, mask) / 1000.0
+	##msg["decoded"]["unk24-25-26-27"] = [ msg["payload"][24], msg["payload"][25],msg["payload"][26],msg["payload"][27] ]
+	
+	msg["decoded"]["nVel"] = decode_long(msg["payload"], 28, mask) / 1000.0
+	msg["decoded"]["eVel"] = decode_long(msg["payload"], 32, mask) / 1000.0
+	msg["decoded"]["dVel"] = decode_long(msg["payload"], 36, mask) / 1000.0	#raw
+
+	#msg["decoded"]["gpsVsi"] = -1 * decode_long(msg["payload"], 36, mask) / 100.0 #nazadecoder
+	msg["decoded"]["spd"] = math.sqrt( (msg["decoded"]["nVel"]*msg["decoded"]["nVel"]) + (msg["decoded"]["eVel"]*msg["decoded"]["eVel"]) )
+	msg["decoded"]["cog"] = math.atan2(msg["decoded"]["eVel"], msg["decoded"]["nVel"]) * 180.0 / math.pi
+	if(msg["decoded"]["cog"] < 0):
+		msg["decoded"]["cog"] += 360.0
+
+	msg["decoded"]["pdop"] = decode_short(msg["payload"], 40, mask) / 100.0
+	msg["decoded"]["vdop"] = decode_short(msg["payload"], 42, mask) / 100.0
+	msg["decoded"]["ndop"] = decode_short(msg["payload"], 44, mask) / 100.0
+	msg["decoded"]["edop"] = decode_short(msg["payload"], 46, mask) / 100.0
+	msg["decoded"]["hdop"] = math.sqrt( (msg["decoded"]["ndop"]*msg["decoded"]["ndop"]) + (msg["decoded"]["edop"]*msg["decoded"]["edop"]) )
+
+	msg["decoded"]["satelites"] = msg["payload"][48]
+	##msg["decoded"]["unk49"] = msg["payload"][49]
+	msg["decoded"]["fix_type"] =  fixtypes.get((msg["payload"][50]^mask), 'UNKNOWN' )
+	##msg["decoded"]["unk51"] = msg["payload"][51]
+	msg["decoded"]["fix_flags"] = msg["payload"][52] ^ mask
+	#if((fix != NO_FIX) && (fixFlags & 0x02)) fix = FIX_DGPS
+	##msg["decoded"]["unk53-54"] = [msg["payload"][53], msg["payload"][54]]
+	msg["decoded"]["mask"] = msg["payload"][54]
+	msg["decoded"]["seq"] = struct.unpack('h', bytearray([msg["payload"][56],msg["payload"][57]]) )[0]
+
+
 	return
 
 
 
 # 55 AA ID LE DATA CS CS
 def recv_message(port):
-	global cs1, cs2
-	mdata = []
+	global message
+	cs1 = 0; cs2 = 0;
+	payload = []
 
 	mid = ord(port.read(1)); mlen = ord(port.read(1))
-	updatecs(mid); updatecs(mlen)
+	updatecs(mid, cs1, cs2); updatecs(mlen, cs1, cs2)
 	rcv = port.read(mlen)
 	for i in rcv:
 		t=ord(i)
-		mdata.append(t)
-		updatecs(t)
+		payload.append(t)
+		updatecs(t, cs1, cs2)
 	mc1 = ord(port.read(1)); mc2 = ord(port.read(1))
 	if ((mc1 == cs1) and (mc2 == cs2)): 
 		check = "ok" 
 	else:
 		check = "fail"
 
-	msg = { "mlen": mlen, "mid": mid, "mtype": msgtypes.get(mid, "UNK0x%02x" % mid), "mdata": mdata, "mcsum": [mc1,mc2], "mccheck": check, "decoded":dict() }
-	if msg["mtype"] == "ver":
+	msg = { "length": mlen, "id": mid, "type": msgtypes.get(mid, "UNK0x%02x" % mid), "payload": payload, "sum": [mc1,mc2], "check": check, "decoded":dict() }
+	if msg["type"] == "ver":
 		decode_ver(msg)
-	if msg["mtype"] == "com":
+	if msg["type"] == "com":
 		decode_com(msg)
 		#logging.debug(msg["decoded"])
-	if msg["mtype"] == "gps":
+	if msg["type"] == "gps":
 		decode_gps(msg)
-		logging.debug(msg["decoded"])
+		#logging.debug(msg["decoded"])
 
-		
-	#logging.info("message %s %d %s %s" % msg["mtype"], mlen, check, repr(mdata)))
 	#logging.info(msg)
+	message_lock.acquire()
+	message[msg["type"]] = msg
+	message_lock.release()
+	return msg
 
+
+def data_reader():
+	try:
+		port = serial.Serial("/dev/ttyAMA0", baudrate=115200, timeout=3.0)
+		while True:
+			rcv = ord(port.read(1))
+			if rcv == 0x55:
+				rcv = ord(port.read(1))
+				if rcv == 0xaa:
+					recv_message(port)
+			else:
+				#logging.warn("rcvd 0x%02x" % rcv)
+				pass
+	except Exception as e:
+		#logging.warn("stopping data_reader")
+		pass
+		
+
+def data_printer():
+	global message, message_lock
+	try:
+		while True:
+			message_lock.acquire()
+			if message["gps"]!={} and message["com"]!={} and message["ver"]!={}:
+				logging.info("%s %s %s %s %s %s %s" % (
+					message["gps"]["decoded"]["datetime"], 
+					message["gps"]["decoded"]["bintime"], 
+					message["gps"]["decoded"]["satelites"], 
+					message["gps"]["decoded"]["lon"], 
+					message["gps"]["decoded"]["lat"], 
+					message["com"]["decoded"]["heading"], 
+					message["gps"]["decoded"]["spd"], 
+				) )
+			message_lock.release()
+			time.sleep(1)
+	except Exception as e:
+		logging.warn(e)
+		#logging.warn("stopping data_printer")
+		pass
 
 #main
-port = serial.Serial("/dev/ttyAMA0", baudrate=115200, timeout=3.0)
-while True:
-	rcv = ord(port.read(1))
-	if rcv == 0x55:
-		rcv = ord(port.read(1))
-		if rcv == 0xaa:
-			cs1 = 0; cs2 = 0
-			recv_message(port)
-	else:
-		logging.warn("rcvd 0x%02x" % rcv)
+try:
+	t1 = threading.Thread(target = data_reader)
+	t1.setDaemon(True)
+	t1.start()
+	t2 = threading.Thread(target = data_printer)
+	t2.setDaemon(True)
+	t2.start()
+	while True:
+		time.sleep(1)
+	t1.join()
+	t2.join()
+
+except (KeyboardInterrupt, SystemExit):
+	sys.exit()
 
