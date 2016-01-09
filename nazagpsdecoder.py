@@ -274,7 +274,8 @@ class NazaGpsDecoder:
 
 		decoded["satelites"] = message["payload"][48]
 		##decoded["unk49"] = message["payload"][49]
-		decoded["fix_type"] = self.fixTypes.get((message["payload"][50]^mask), 'UNKNOWN' )
+		decoded["fix_type"] = message["payload"][50]^mask
+		decoded["fix"] = self.fixTypes.get(decoded["fix_type"], 'UNKNOWN')
 		##decoded["unk51"] = message["payload"][51]
 		decoded["fix_flags"] = message["payload"][52] ^ mask
 		#if((fix != NO_FIX) && (fixFlags & 0x02)) fix = FIX_DGPS
