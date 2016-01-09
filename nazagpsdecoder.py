@@ -3,7 +3,17 @@ import struct
 import math
 import datetime, time
 
-
+# naza gps serial decoder, taken from 
+#	http://www.rcgroups.com/forums/showthread.php?t=1995704a
+#	https://github.com/mandersonian/minimosd-naza-frsky/blob/master/NazaDecoderLib.cppa
+#	https://developer.mbed.org/users/garfield38/code/NazaDecoder/rev/b0ba4e08a18c
+# serial line: 115200 baud
+# message struct: 55 AA ID LE <payload> ZZ ZZ
+#	0x55 0xAA .. header
+# 	LE .. mesage length
+#	ID 0x10 which contains GPS data, sent every 250ms (refer to post #15 for more details)
+#	ID 0x20 which contains compass data, sent every 30ms (refer to post #62 for more details)
+#	ID 0x30 which contains GPS module version numbers, sent every 2s (refer to post#120 for more details)
 class NazaGpsDecoder:
 	messageTypes = { 0x10: "gps", 0x20: "com", 0x30: "ver" }
 	fixTypes = { 0: "nolock", 2: "2d", 3: "3d" }
@@ -72,24 +82,28 @@ class NazaGpsDecoder:
 		}
 		return message
 
+	def decodeMessage(self, message):
+		ret = {}
+		if message["type"] == "ver":
+			ret = self.decodeVerMessage(message)
+		if message["type"] == "com":
+			ret = self.decodeComMessage(message)
+		if message["type"] == "gps":
+			ret = self.decodeGpsMessage(message)
+		return ret
+
 	def readMessage(self, atype):
 		if atype not in self.messageTypes.values():
 			raise Exception("Not supported message type")
-
 		#device is sending messages all the time, we have to wait for a requested type
+
 		loop = True
+		self.port.read(self.port.inWaiting())
 		while loop:
 			msg = self.readRawMessage()
 			if msg["type"] == atype:
 				loop = False
-
-		if msg["type"] == "ver":
-			msg["decoded"] = self.decodeVerMessage(msg)
-		if msg["type"] == "com":
-			msg["decoded"] = self.decodeComMessage(msg)
-		if msg["type"] == "gps":
-			msg["decoded"] = self.decodeGpsMessage(msg)
-
+		msg["decoded"] = self.decodeMessage(msg)
 		return msg
 
 
@@ -219,7 +233,7 @@ class NazaGpsDecoder:
 
 		time = self.decodeLong(message["payload"], 0, mask)
 		decoded["time"] = time
-		decoded["bintime"] = bin(time)
+		#decoded["bintime"] = bin(time)
 		second = time & 0x3f
 	        time >>= 6
 	        minute = time & 0x3f
@@ -273,7 +287,9 @@ class NazaGpsDecoder:
 
 if __name__ == '__main__':
 	decoder = NazaGpsDecoder()
-	print "SELFTEST",decoder.readRawMessage()
+	a = decoder.readRawMessage()
+	print "SELFTEST",a
+	print "SELFTEST",decoder.decodeMessage(a)
 	print "SELFTEST",decoder.readMessage("ver")
 	print "SELFTEST",decoder.readMessage("com")
 	print "SELFTEST",decoder.readMessage("gps")
