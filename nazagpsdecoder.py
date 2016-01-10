@@ -248,7 +248,7 @@ class NazaGpsDecoder:
 			day += 1
 	        time >>= 5
 
-		month = time & 0x0ft stat
+		month = time & 0x0f
 	        time >>= 4
 
 	        year = (time & 0x3f) + 2000 # ?? << 
