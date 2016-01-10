@@ -233,20 +233,26 @@ class NazaGpsDecoder:
 
 		time = self.decodeLong(message["payload"], 0, mask)
 		decoded["time"] = time
-		#decoded["bintime"] = bin(time)
+
 		second = time & 0x3f
 	        time >>= 6
+
 	        minute = time & 0x3f
 	        time >>= 6
+
 	        hour = time & 0x0f
 	        time >>= 4
+
 	        day = time & 0x1f
-	        time >>= 5
 	        if(hour > 7):
 			day += 1
-		month = time & 0x0f
+	        time >>= 5
+
+		month = time & 0x0ft stat
 	        time >>= 4
+
 	        year = (time & 0x3f) + 2000 # ?? << 
+
 		decoded["datetime"] = str(datetime.datetime(year=year, month=month, day=day, hour=hour, minute=minute, second=second))
 
 		decoded["lon"] = self.decodeLong(message["payload"], 4, mask) / 10000000.0
