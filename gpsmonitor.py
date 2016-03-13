@@ -31,7 +31,7 @@ def data_reader():
 def data_printer():
 	global message, message_lock
 	fmt = "%6s %20s %32s %4s %-10s %-10s %-13s %-16s"
-	columns = ("seq", "datetime", "bintime", "sats", "lon", "lat", "heading", "spd")
+	columns = ("seq", "datetime", "bintime", "sats", "lat", "lon", "heading", "spd")
 	logging.info(fmt % columns)
 	try:
 		while True:
@@ -42,8 +42,8 @@ def data_printer():
 					message["gps"]["decoded"]["datetime"], 
 					bin(message["gps"]["decoded"]["time"]),
 					message["gps"]["decoded"]["satelites"], 
-					message["gps"]["decoded"]["lon"], 
 					message["gps"]["decoded"]["lat"], 
+					message["gps"]["decoded"]["lon"], 
 					message["com"]["decoded"]["heading"], 
 					message["gps"]["decoded"]["spd"], 
 				) )

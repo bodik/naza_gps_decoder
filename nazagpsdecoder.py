@@ -240,9 +240,11 @@ class NazaGpsDecoder:
 	        minute = time & 0x3f
 	        time >>= 6
 
+		# there might be some bits shared between hour and day
 	        hour = time & 0x0f
 	        time >>= 4
 
+		# i do not really get why +1 for day
 	        day = time & 0x1f
 	        if(hour > 7):
 			day += 1
